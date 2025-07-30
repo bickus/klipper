@@ -171,28 +171,28 @@ class PATest:
             while brim_x_offset > .5 * (inner_size_x - first_layer_width):
                 yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                         origin_x - brim_x_offset, origin_y + brim_y_offset,
-                        2. * brim_y_offset * extr_r, slow_velocity * 60.)
+                        2. * brim_y_offset * extr_r, medium_velocity  * 60.)
                 yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                         origin_x + brim_x_offset, origin_y + brim_y_offset,
-                        2. * brim_x_offset * extr_r, slow_velocity * 60.)
+                        2. * brim_x_offset * extr_r, medium_velocity  * 60.)
                 yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                         origin_x + brim_x_offset, origin_y - brim_y_offset,
-                        2. * brim_y_offset * extr_r, slow_velocity * 60.)
+                        2. * brim_y_offset * extr_r, medium_velocity  * 60.)
                 new_brim_x_offset = brim_x_offset - first_layer_width
                 new_brim_y_offset = brim_y_offset - first_layer_width
                 yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                         origin_x - new_brim_x_offset,
                         origin_y - brim_y_offset,
                         (brim_x_offset + new_brim_x_offset) * extr_r,
-                        slow_velocity * 60.)
+                        medium_velocity  * 60.)
                 brim_x_offset = new_brim_x_offset
                 brim_y_offset = new_brim_y_offset
             yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                     origin_x - brim_x_offset, origin_y + brim_y_offset,
-                    2. * brim_y_offset * extr_r, slow_velocity * 60.)
+                    2. * brim_y_offset * extr_r, medium_velocity  * 60.)
             yield 'G1 X%.3f Y%.3f E%.6f F%.f' % (
                     origin_x, origin_y + brim_y_offset,
-                    brim_x_offset * extr_r, slow_velocity * 60.)
+                    brim_x_offset * extr_r, medium_velocity  * 60.)
             self.progress = start_z / height
         def gen_tower():
             last_z = first_layer_height
