@@ -453,7 +453,7 @@ class MCU_pwm:
             return
         # Software PWM
         if self._shutdown_value not in [0., 1.]:
-            raise pins.error("shutdown value must be 0.0 or 1.0 on soft pwm")
+            raise pins.error("shutdown value must be 0.0 or 1.0 on soft pwm: %s" % (self._pin))
         if cycle_ticks >= 1<<31:
             raise pins.error("PWM pin cycle time too large")
         self._mcu.request_move_queue_slot()
