@@ -53,6 +53,8 @@ class ForceMove:
                                 desc=self.cmd_SET_KINEMATIC_POSITION_help)
     def register_stepper(self, config, mcu_stepper):
         self.steppers[mcu_stepper.get_name()] = mcu_stepper
+        logging.info("force_move ::: register_stepper :::  %s ",
+                     mcu_stepper.get_name())
     def lookup_stepper(self, name):
         if name not in self.steppers:
             raise self.printer.config_error("Unknown stepper %s" % (name,))
