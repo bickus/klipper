@@ -291,6 +291,9 @@ class PrinterButtons:
     def register_debounce_button(self, pin, callback, config):
         debounce = DebounceButton(config, callback)
         return self.register_buttons([pin], debounce.button_handler)
+    def register_debounce_endstop_button(self, pin, callback, config):
+        debounce_endstop = DebounceButton(config, callback)
+        return self.register_buttons([pin], debounce_endstop.button_handler, True)
     def register_debounce_adc_button(self, pin, min_val, max_val, pullup
                                      , callback, config):
         debounce = DebounceButton(config, callback)
@@ -301,13 +304,19 @@ class PrinterButtons:
             if state:
                 callback(eventtime)
         self.register_adc_button(pin, min_val, max_val, pullup, helper)
-    def register_buttons(self, pins, callback):
+    def register_buttons(self, pins, callback, skip_pin_lookup = False):
         # Parse pins
         ppins = self.printer.lookup_object('pins')
         mcu = mcu_name = None
         pin_params_list = []
         for pin in pins:
-            pin_params = ppins.lookup_pin(pin, can_invert=True, can_pullup=True)
+            logging.info(
+                "buttons ::: register_buttons ::: pin='%s' | skip_pin_lookup='%s'" %
+                (pin, skip_pin_lookup))    
+            if (skip_pin_lookup):
+                pin_params = ppins.parse_pin(pin, can_invert=True, can_pullup=True)
+            else:
+                pin_params = ppins.lookup_pin(pin, can_invert=True, can_pullup=True)
             if mcu is not None and pin_params['chip'] != mcu:
                 raise ppins.error("button pins must be on same mcu")
             mcu = pin_params['chip']

@@ -109,13 +109,40 @@ class SwitchSensor:
     def __init__(self, config):
         printer = config.get_printer()
         buttons = printer.load_object(config, 'buttons')
-        switch_pin = config.get('switch_pin')
-        buttons.register_debounce_button(switch_pin, self._button_handler
+        switch_pin = config.get('switch_pin')        
+        is_endstop = config.get('is_endstop', None) is not None
+        if is_endstop:
+            logging.info(
+                "filament_switch_sensor '%s' ::: is endstop ::: registering as endstop" %
+                (config.get_name()))        
+            # New endstop, register it
+            ppins = printer.lookup_object('pins')
+            endstop = ppins.setup_pin('endstop', switch_pin)
+            query_endstops = printer.load_object(config, 'query_endstops')
+            name = config.get_name().split()[-1]
+            query_endstops.register_endstop(endstop, name)
+
+            # register as button as well
+            logging.info(
+                "filament_switch_sensor '%s' ::: is endstop ::: registering as button" %
+                (config.get_name()))   
+            buttons.register_debounce_endstop_button(switch_pin, self._button_handler, config)
+
+            endless_spool = printer.lookup_object('endless_spool')
+            endless_spool.register_flexi_filament_switch(name,self)
+        else:
+            buttons.register_debounce_button(switch_pin, self._button_handler
                                          , config)
         self.runout_helper = RunoutHelper(config)
         self.get_status = self.runout_helper.get_status
     def _button_handler(self, eventtime, state):
         self.runout_helper.note_filament_present(eventtime, state)
+    def get_status(self):
+        return self.runout_helper.get_status(None)
+    def enable(self):
+        self.runout_helper.sensor_enabled=True
+    def disable(self):
+        self.runout_helper.sensor_enabled=False
 
 def load_config_prefix(config):
     return SwitchSensor(config)
