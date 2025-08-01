@@ -124,7 +124,7 @@ class EndlessSpool_ManualStepper_Extensions:
         try:
             self.do_flexi_homing(movepos, speed, accel, triggerValue, True, endstop_name)
             logging.info("manual_stepper '%s' ::: do_flexi_homing ::: completed @ '%s'",
-                     self.get_position()[0])
+                     self.rail.get_name(), self.get_position()[0])
         except self.printer.command_error as e:
             self.flush_step_generation()
             self.enable_filament_switch(endstop_name)
