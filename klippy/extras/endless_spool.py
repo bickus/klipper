@@ -1,6 +1,7 @@
 from mcu import MCU_endstop, MCU_trsync, TriggerDispatch
 from extras.query_endstops import QueryEndstops
 from extras.manual_stepper import ManualStepper
+from extras.homing import PrinterHoming, HomingMove
 
 import logging
 
@@ -27,6 +28,26 @@ class EndlessSpool_QueryEndstop_Extensions:
                 return mcu_endstop
         return None
 
+class EndlessSpool_PrinterHoming_Extensions:
+    def home_with_probing(self, toolhead, endstops, pos, speed, triggered, check_triggered):
+        logging.info(f"Starting home_with_probing: pos={pos}, speed={speed}, triggered={triggered}, check_triggered={check_triggered}")
+        hmove = HomingMove(self.printer, endstops, toolhead)
+        try:
+            epos = hmove.homing_move(pos, speed, triggered=triggered, check_triggered=check_triggered, probe_pos=True)
+            logging.debug(f"home_with_probing move completed. Endpoint position: {epos}")
+        except self.printer.command_error as e:
+            if self.printer.is_shutdown():
+                error_message = "home_with_probing failed due to printer shutdown"
+                logging.error(error_message)
+                raise self.printer.command_error(error_message)
+            logging.error("home_with_probing move failed.")
+            raise
+        if hmove.check_no_movement() is not None:
+            error_message = "Probe triggered prior to movement"
+            logging.error(error_message)
+            raise self.printer.command_error(error_message)
+        return epos
+
 class EndlessSpool_ManualStepper_Extensions:
     def new_init(self, config):
         logging.info("EndlessSpool_ManualStepper_Extensions ::: new_init for '%s'", config.get_name())
@@ -40,6 +61,10 @@ class EndlessSpool_ManualStepper_Extensions:
                                     stepper_name, self.cmd_MANUAL_STEPPER_FLEXI_HOME)
         else:
             self.flexi_home = False
+
+    def get_status(self, eventtime):
+        return {
+            "position": self.get_position()[0]}
 
     def get_current_endstop_state(self, endstop_name):
         endless_spool = self.printer.lookup_object('endless_spool')
@@ -98,7 +123,7 @@ class EndlessSpool_ManualStepper_Extensions:
         endstops=[]
         endstops.append((endstop, endstop_name))
         phoming = self.printer.lookup_object('homing')
-        phoming.manual_home(self, endstops, pos, speed,
+        phoming.home_with_probing(self, endstops, pos, speed,
                             triggered, check_trigger)
 
     def cmd_MANUAL_STEPPER_FLEXI_HOME(self, gcmd):
@@ -152,6 +177,7 @@ class EndlessSpool:
         TriggerDispatch.clear_steppers = EndlessSpool_TriggerDispatch_Extensions.dispatch_clear_steppers
         MCU_trsync.clear_steppers = EndlessSpool_Trsync_Extensions.trsync_clear_steppers
         QueryEndstops.lookup_endstop = EndlessSpool_QueryEndstop_Extensions.lookup_endstop
+        PrinterHoming.home_with_probing = EndlessSpool_PrinterHoming_Extensions.home_with_probing
 
     def _extend_manual_stepper(self):
         logging.info("EndlessSpool ::: extend manual stepper")
@@ -160,6 +186,7 @@ class EndlessSpool:
         ManualStepper.do_flexi_homing=EndlessSpool_ManualStepper_Extensions.do_flexi_homing
         ManualStepper.cmd_MANUAL_STEPPER_FLEXI_HOME=EndlessSpool_ManualStepper_Extensions.cmd_MANUAL_STEPPER_FLEXI_HOME
         ManualStepper.get_current_endstop_state=EndlessSpool_ManualStepper_Extensions.get_current_endstop_state
+        ManualStepper.get_status=EndlessSpool_ManualStepper_Extensions.get_status
 
         ManualStepper.old_init=ManualStepper.__init__
         ManualStepper.__init__=EndlessSpool_ManualStepper_Extensions.__dict__['new_init']
