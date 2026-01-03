@@ -313,8 +313,8 @@ class ExtruderStepper:
                self.smoother.get_msg() +
                "\npressure_advance_time_offset: %.6f"
                % (time_offset,))
-        self.printer.set_rollover_info(self.name, "%s: %s" % (self.name, msg))
-        gcmd.respond_info(msg, log=False)
+        #self.printer.set_rollover_info(self.name, "%s: %s" % (self.name, msg))
+        #gcmd.respond_info(msg, log=False)
     cmd_SET_E_ROTATION_DISTANCE_help = "Set extruder rotation distance"
     def cmd_SET_E_ROTATION_DISTANCE(self, gcmd):
         rotation_dist = gcmd.get_float('DISTANCE', None)

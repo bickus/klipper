@@ -5,6 +5,10 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging, logging.handlers, threading, queue, time
 
+# Default formatter to ensure timestamps are always present in the log file
+DEFAULT_LOG_FORMAT = '%(asctime)s %(levelname)s %(message)s'
+DEFAULT_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+
 # Class to forward all messages through a queue to a background thread
 class QueueHandler(logging.Handler):
     def __init__(self, queue):
@@ -31,6 +35,10 @@ class QueueListener(logging.handlers.TimedRotatingFileHandler):
             logging.handlers.TimedRotatingFileHandler.__init__(
                 self, filename, when="midnight", backupCount=5
             )
+        # Ensure every log entry is timestamped unless an explicit formatter
+        # is set elsewhere.
+        if self.formatter is None:
+            self.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT, DEFAULT_DATE_FORMAT))
         self.bg_queue = queue.Queue()
         self.bg_thread = threading.Thread(target=self._bg_thread, name='klippy_logger')
         self.bg_thread.start()
