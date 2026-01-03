@@ -597,6 +597,9 @@ class TMCCommandHelper:
             gcmd.respond_info("Graph saved to %s" % (png_path,))
             if os.path.exists(html_path):
                 gcmd.respond_info("Interactive graph: %s" % (html_path,))
+            else:
+                gcmd.respond_info("HTML graph skipped (install plotly: "
+                                  "pip install plotly)")
         else:
             error_msg = result.stderr.strip() or result.stdout.strip()
             gcmd.respond_info("Graph generation error (code %d): %s"
