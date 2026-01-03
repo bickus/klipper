@@ -228,7 +228,7 @@ class TMCErrorCheck:
 ######################################################################
 
 Stallguard_Measurement = collections.namedtuple(
-    'Stallguard_Measurement', ('time', 'sg_result', 'cs_actual'))
+    'Stallguard_Measurement', ('time', 'sg_result', 'cs_actual', 'velocity'))
 
 class StallguardQueryHelper:
     def __init__(self, printer, stepper_name):
@@ -259,13 +259,14 @@ class StallguardQueryHelper:
         count = 0
         self.samples = samples = [None] * total
         for msg in self.msgs:
-            for samp_time, sg_result, cs_actual in msg['data']:
+            for samp_time, sg_result, cs_actual, velocity in msg['data']:
                 if samp_time < self.start_time:
                     continue
                 if samp_time > self.end_time:
                     break
                 samples[count] = Stallguard_Measurement(samp_time,
-                                                        sg_result, cs_actual)
+                                                        sg_result, cs_actual,
+                                                        velocity)
                 count += 1
         del samples[count:]
         return self.samples
@@ -292,9 +293,9 @@ class StallguardQueryHelper:
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
         with open(filename, "w") as f:
-            f.write("#time,sg_result,cs_actual\n")
-            for t, sg_result, cs_actual in samples:
-                f.write("%.6f,%d,%d\n" % (t, sg_result, cs_actual))
+            f.write("#time,sg_result,cs_actual,velocity\n")
+            for t, sg_result, cs_actual, velocity in samples:
+                f.write("%.6f,%d,%d,%.2f\n" % (t, sg_result, cs_actual, velocity))
 
 class TMCStallguardDump:
     def __init__(self, config, mcu_tmc):
@@ -328,13 +329,20 @@ class TMCStallguardDump:
         self.query_timer = None
         self.error = None
         self.query_interval = 1.0  # Default 1 second between samples
+        self.motion_report = None
+        # Determine which trapq to use based on stepper name
+        if self.stepper_name.startswith("extruder"):
+            self.trapq_name = self.stepper_name  # "extruder" or "extruder1"
+        else:
+            self.trapq_name = "toolhead"  # For stepper_x, stepper_y, stepper_z
         self.batch_bulk = bulk_sensor.BatchBulkHelper(
             self.printer, self._dump, self._start, self._stop)
-        api_resp = {'header': ('time', 'sg_result', 'cs_actual')}
+        api_resp = {'header': ('time', 'sg_result', 'cs_actual', 'velocity')}
         self.batch_bulk.add_mux_endpoint("tmc/stallguard_dump", "name",
                                          self.stepper_name, api_resp)
     def _start(self):
         self.error = None
+        self.motion_report = self.printer.lookup_object('motion_report', None)
         status = self.mcu_tmc.get_register_raw("DRV_STATUS")
         if status.get("spi_status"):
             self.optimized_spi = True
@@ -348,10 +356,11 @@ class TMCStallguardDump:
     def _query_tmc(self, eventtime):
         sg_result = -1
         cs_actual = -1
+        velocity = 0.0
         recv_time = eventtime
         try:
             if self.optimized_spi or self.sg4_reg_name == "SG4_RESULT":
-                #TMC2130/TMC5160/TMC2240
+                # TMC2130/TMC5160/TMC2240
                 status = self.mcu_tmc.get_register_raw("DRV_STATUS")
                 reg_val = status["data"]
                 cs_actual = self.fields.get_field("cs_actual", reg_val)
@@ -372,7 +381,14 @@ class TMCStallguardDump:
             self.error = e
             return self.printer.get_reactor().NEVER
         print_time = self.mcu.estimated_print_time(recv_time)
-        self.samples.append((print_time, sg_result, cs_actual))
+        # Get velocity from trapq
+        if self.motion_report is not None:
+            trapq = self.motion_report.trapqs.get(self.trapq_name)
+            if trapq is not None:
+                pos, vel = trapq.get_trapq_position(print_time)
+                if vel is not None:
+                    velocity = vel
+        self.samples.append((print_time, sg_result, cs_actual, velocity))
         return eventtime + self.query_interval
     def _dump(self, eventtime):
         if self.error:
@@ -381,6 +397,9 @@ class TMCStallguardDump:
         self.samples = []
         return {"data": samples}
     def start_internal_client(self):
+        if self.batch_bulk is None:
+            raise self.printer.command_error(
+                "Stallguard not supported on '%s'" % self.stepper_name)
         sqh = StallguardQueryHelper(self.printer, self.stepper_name)
         self.batch_bulk.add_client(sqh.handle_batch)
         return sqh
@@ -632,7 +651,7 @@ class TMCCommandHelper:
                              self.stepper_name)
                 self.printer.lookup_object('toolhead').wait_moves()
                 self._handle_sync_mcu_pos(self.stepper)
-            logging.info(f"Tuning TMC Driver for stepper: {self.stepper}")
+            logging.info("Tuning TMC Driver for stepper: %s", self.stepper_name)
             self.current_helper.tune_driver()
         except self.printer.command_error as e:
             self.printer.invoke_shutdown(str(e))
@@ -1013,12 +1032,13 @@ class BaseTMCCurrentHelper:
         
         if ( self.sense_resistor is not None
          and self.motor is not None
-         and self.voltage is not None):
+         and self.voltage is not None
+         and self.voltage > 0):
             self.driver_tuning = True
-            logging.info(f"tmc {self.name} ::: AutoTuning activated!")
-        else : 
+            logging.info("tmc %s ::: AutoTuning activated!", self.name)
+        else:
             self.driver_tuning = None
-            logging.info(f"tmc {self.name} ::: AutoTuning not active!")
+            logging.info("tmc %s ::: AutoTuning not active!", self.name)
 
             
         
