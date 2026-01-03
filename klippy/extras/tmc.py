@@ -327,6 +327,7 @@ class TMCStallguardDump:
         self.samples = []
         self.query_timer = None
         self.error = None
+        self.query_interval = 1.0  # Default 1 second between samples
         self.batch_bulk = bulk_sensor.BatchBulkHelper(
             self.printer, self._dump, self._start, self._stop)
         api_resp = {'header': ('time', 'sg_result', 'cs_actual')}
@@ -372,10 +373,7 @@ class TMCStallguardDump:
             return self.printer.get_reactor().NEVER
         print_time = self.mcu.estimated_print_time(recv_time)
         self.samples.append((print_time, sg_result, cs_actual))
-        if self.optimized_spi:
-            return eventtime + 0.001
-        # UART queried as fast as possible
-        return eventtime + 0.005
+        return eventtime + self.query_interval
     def _dump(self, eventtime):
         if self.error:
             raise self.error
@@ -513,11 +511,10 @@ class TMCCommandHelper:
     def _start_stallguard_measurement(self, gcmd):
         if self.record_helper.batch_bulk is None:
             raise gcmd.error("Stallguard not supported on this driver")
-        interval = gcmd.get_float("INTERVAL", 1.0, minval=0.1, maxval=10.0)
+        interval = gcmd.get_float("INTERVAL", 1.0, minval=0.01, maxval=10.0)
         self.sg_output = gcmd.get("OUTPUT", None)
-        self.sg_interval = interval
-        # Modify batch interval temporarily
-        self.record_helper.batch_bulk.batch_interval = interval
+        # Set sampling interval
+        self.record_helper.query_interval = interval
         # Start measurement
         self.sg_measurement = self.record_helper.start_internal_client()
         gcmd.respond_info("Stallguard measurement started for %s "
@@ -578,7 +575,9 @@ class TMCCommandHelper:
         if result.returncode == 0:
             gcmd.respond_info("Graph saved to %s" % (png_path,))
         else:
-            gcmd.respond_info("Graph generation error: %s" % (result.stderr,))
+            error_msg = result.stderr.strip() or result.stdout.strip()
+            gcmd.respond_info("Graph generation error (code %d): %s"
+                              % (result.returncode, error_msg or "unknown"))
     # Stepper phase tracking
     def _get_phases(self):
         return (256 >> self.fields.get_field("mres")) * 4
