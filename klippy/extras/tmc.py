@@ -3,9 +3,9 @@
 # Copyright (C) 2018-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, collections, os, math
+import logging, collections, os, math, time
 import stepper
-from . import stepstick_defs
+from . import bulk_sensor, stepstick_defs
 
 ######################################################################
 # Field helpers
@@ -224,6 +224,171 @@ class TMCErrorCheck:
 
 
 ######################################################################
+# Record driver status
+######################################################################
+
+Stallguard_Measurement = collections.namedtuple(
+    'Stallguard_Measurement', ('time', 'sg_result', 'cs_actual'))
+
+class StallguardQueryHelper:
+    def __init__(self, printer, stepper_name):
+        self.printer = printer
+        self.stepper_name = stepper_name
+        self.is_finished = False
+        print_time = printer.lookup_object('toolhead').get_last_move_time()
+        self.start_time = print_time
+        self.end_time = print_time
+        self.msgs = []
+        self.samples = []
+    def finish_measurements(self):
+        toolhead = self.printer.lookup_object('toolhead')
+        self.end_time = toolhead.get_last_move_time()
+        toolhead.wait_moves()
+        self.is_finished = True
+    def handle_batch(self, msg):
+        if self.is_finished:
+            return False
+        if len(self.msgs) >= 50000:
+            return False
+        self.msgs.append(msg)
+        return True
+    def get_samples(self):
+        if not self.msgs:
+            return self.samples
+        total = sum([len(m['data']) for m in self.msgs])
+        count = 0
+        self.samples = samples = [None] * total
+        for msg in self.msgs:
+            for samp_time, sg_result, cs_actual in msg['data']:
+                if samp_time < self.start_time:
+                    continue
+                if samp_time > self.end_time:
+                    break
+                samples[count] = Stallguard_Measurement(samp_time,
+                                                        sg_result, cs_actual)
+                count += 1
+        del samples[count:]
+        return self.samples
+    def get_stats(self):
+        samples = self.get_samples()
+        if not samples:
+            return None
+        sg_values = [s.sg_result for s in samples if s.sg_result >= 0]
+        cs_values = [s.cs_actual for s in samples if s.cs_actual >= 0]
+        stats = {}
+        if sg_values:
+            stats['sg_min'] = min(sg_values)
+            stats['sg_max'] = max(sg_values)
+            stats['sg_avg'] = sum(sg_values) / len(sg_values)
+            stats['sg_count'] = len(sg_values)
+        if cs_values:
+            stats['cs_min'] = min(cs_values)
+            stats['cs_max'] = max(cs_values)
+            stats['cs_avg'] = sum(cs_values) / len(cs_values)
+        return stats
+    def write_to_file(self, filename):
+        samples = self.samples or self.get_samples()
+        dir_path = os.path.dirname(filename)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        with open(filename, "w") as f:
+            f.write("#time,sg_result,cs_actual\n")
+            for t, sg_result, cs_actual in samples:
+                f.write("%.6f,%d,%d\n" % (t, sg_result, cs_actual))
+
+class TMCStallguardDump:
+    def __init__(self, config, mcu_tmc):
+        self.printer = config.get_printer()
+        self.stepper_name = ' '.join(config.get_name().split()[1:])
+        self.mcu_tmc = mcu_tmc
+        self.mcu = self.mcu_tmc.get_mcu()
+        self.fields = self.mcu_tmc.get_fields()
+        self.sg2_supp = False
+        self.sg4_reg_name = None
+        self.batch_bulk = None  # Initialize for early return cases
+        # It is possible to support TMC2660, just disable it for now
+        if not self.fields.all_fields.get("DRV_STATUS", None):
+            return
+        # Collect driver capabilities
+        if self.fields.all_fields["DRV_STATUS"].get("sg_result", None):
+            self.sg2_supp = True
+        # New drivers have separate register for SG4 result
+        if self.mcu_tmc.name_to_reg.get("SG_RESULT", 0):
+            self.sg4_reg_name = "SG_RESULT"
+        # 2240 supports both SG2 & SG4
+        if self.sg4_reg_name is None:
+            if self.mcu_tmc.name_to_reg.get("SG4_RESULT", 0):
+                self.sg4_reg_name = "SG4_RESULT"
+        # TMC2208
+        if not self.sg2_supp and self.sg4_reg_name is None:
+            return
+        self.optimized_spi = False
+        # Bulk API
+        self.samples = []
+        self.query_timer = None
+        self.error = None
+        self.batch_bulk = bulk_sensor.BatchBulkHelper(
+            self.printer, self._dump, self._start, self._stop)
+        api_resp = {'header': ('time', 'sg_result', 'cs_actual')}
+        self.batch_bulk.add_mux_endpoint("tmc/stallguard_dump", "name",
+                                         self.stepper_name, api_resp)
+    def _start(self):
+        self.error = None
+        status = self.mcu_tmc.get_register_raw("DRV_STATUS")
+        if status.get("spi_status"):
+            self.optimized_spi = True
+        reactor = self.printer.get_reactor()
+        self.query_timer = reactor.register_timer(self._query_tmc,
+                                                  reactor.NOW)
+    def _stop(self):
+        self.printer.get_reactor().unregister_timer(self.query_timer)
+        self.query_timer = None
+        self.samples = []
+    def _query_tmc(self, eventtime):
+        sg_result = -1
+        cs_actual = -1
+        recv_time = eventtime
+        try:
+            if self.optimized_spi or self.sg4_reg_name == "SG4_RESULT":
+                #TMC2130/TMC5160/TMC2240
+                status = self.mcu_tmc.get_register_raw("DRV_STATUS")
+                reg_val = status["data"]
+                cs_actual = self.fields.get_field("cs_actual", reg_val)
+                sg_result = self.fields.get_field("sg_result", reg_val)
+                is_stealth = self.fields.get_field("stealth", reg_val)
+                recv_time = status["#receive_time"]
+                if is_stealth and self.sg4_reg_name == "SG4_RESULT":
+                    sg4_ret = self.mcu_tmc.get_register_raw("SG4_RESULT")
+                    sg_result = sg4_ret["data"]
+                    recv_time = sg4_ret["#receive_time"]
+            else:
+                # TMC2209
+                if self.sg4_reg_name == "SG_RESULT":
+                    sg4_ret = self.mcu_tmc.get_register_raw("SG_RESULT")
+                    sg_result = sg4_ret["data"]
+                    recv_time = sg4_ret["#receive_time"]
+        except self.printer.command_error as e:
+            self.error = e
+            return self.printer.get_reactor().NEVER
+        print_time = self.mcu.estimated_print_time(recv_time)
+        self.samples.append((print_time, sg_result, cs_actual))
+        if self.optimized_spi:
+            return eventtime + 0.001
+        # UART queried as fast as possible
+        return eventtime + 0.005
+    def _dump(self, eventtime):
+        if self.error:
+            raise self.error
+        samples = self.samples
+        self.samples = []
+        return {"data": samples}
+    def start_internal_client(self):
+        sqh = StallguardQueryHelper(self.printer, self.stepper_name)
+        self.batch_bulk.add_client(sqh.handle_batch)
+        return sqh
+
+
+######################################################################
 # G-Code command helpers
 ######################################################################
 
@@ -235,6 +400,8 @@ class TMCCommandHelper:
         self.mcu_tmc = mcu_tmc
         self.current_helper = current_helper
         self.echeck_helper = TMCErrorCheck(config, mcu_tmc)
+        self.record_helper = TMCStallguardDump(config, mcu_tmc)
+        self.sg_measurement = None  # Active measurement when MEASURE_STALLGUARD
         self.fields = mcu_tmc.get_fields()
         self.read_registers = self.read_translate = None
         self.toff = None
@@ -262,6 +429,9 @@ class TMCCommandHelper:
         gcode.register_mux_command("SET_TMC_CURRENT", "STEPPER", self.name,
                                    self.cmd_SET_TMC_CURRENT,
                                    desc=self.cmd_SET_TMC_CURRENT_help)
+        gcode.register_mux_command("MEASURE_STALLGUARD", "STEPPER", self.name,
+                                   self.cmd_MEASURE_STALLGUARD,
+                                   desc=self.cmd_MEASURE_STALLGUARD_help)
     def _init_registers(self, print_time=None):
         # Send registers
         for reg_name in list(self.fields.registers.keys()):
@@ -334,6 +504,81 @@ class TMCCommandHelper:
                 "Run Current: %0.2fA Hold Current: %0.2fA Home Current: %0.2fA"
                 % (run_current, hold_current, home_current)
             )
+    cmd_MEASURE_STALLGUARD_help = "Measure stallguard values (toggle start/stop)"
+    def cmd_MEASURE_STALLGUARD(self, gcmd):
+        if self.sg_measurement is not None:
+            self._stop_stallguard_measurement(gcmd)
+        else:
+            self._start_stallguard_measurement(gcmd)
+    def _start_stallguard_measurement(self, gcmd):
+        if self.record_helper.batch_bulk is None:
+            raise gcmd.error("Stallguard not supported on this driver")
+        interval = gcmd.get_float("INTERVAL", 1.0, minval=0.1, maxval=10.0)
+        self.sg_output = gcmd.get("OUTPUT", None)
+        self.sg_interval = interval
+        # Modify batch interval temporarily
+        self.record_helper.batch_bulk.batch_interval = interval
+        # Start measurement
+        self.sg_measurement = self.record_helper.start_internal_client()
+        gcmd.respond_info("Stallguard measurement started for %s "
+                          "(interval=%.1fs). Call MEASURE_STALLGUARD again "
+                          "to stop." % (self.name, interval))
+    def _stop_stallguard_measurement(self, gcmd):
+        client = self.sg_measurement
+        self.sg_measurement = None
+        client.finish_measurements()
+        # Get statistics
+        stats = client.get_stats()
+        if not stats:
+            gcmd.respond_info("No stallguard samples collected for %s"
+                              % (self.name,))
+            return
+        # Report statistics
+        if 'sg_min' in stats:
+            gcmd.respond_info(
+                "Stallguard for %s: min=%d, max=%d, avg=%.1f (n=%d samples)"
+                % (self.name, stats['sg_min'], stats['sg_max'],
+                   stats['sg_avg'], stats['sg_count']))
+        if 'cs_min' in stats:
+            gcmd.respond_info(
+                "CS_actual for %s: min=%d, max=%d, avg=%.1f"
+                % (self.name, stats['cs_min'], stats['cs_max'],
+                   stats['cs_avg']))
+        # Determine output path
+        if self.sg_output:
+            output_path = self.sg_output
+        else:
+            config_file = self.printer.get_start_args()['config_file']
+            config_dir = os.path.dirname(config_file)
+            sg_dir = os.path.join(config_dir, "stallguard_results")
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = os.path.join(sg_dir, "%s_%s.csv"
+                                       % (self.name, timestamp))
+        # Write CSV
+        client.write_to_file(output_path)
+        gcmd.respond_info("Stallguard data saved to %s" % (output_path,))
+        # Generate graph
+        try:
+            self._generate_stallguard_graph(output_path, gcmd)
+        except Exception as e:
+            gcmd.respond_info("Graph generation failed: %s" % (str(e),))
+    def _generate_stallguard_graph(self, csv_path, gcmd):
+        import subprocess
+        script_dir = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        script_path = os.path.join(script_dir, "scripts",
+                                   "calibrate_stallguard.py")
+        if not os.path.exists(script_path):
+            gcmd.respond_info("Graph script not found: %s" % (script_path,))
+            return
+        png_path = csv_path.rsplit('.', 1)[0] + '.png'
+        result = subprocess.run(
+            ['python3', script_path, csv_path, '-o', png_path],
+            capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            gcmd.respond_info("Graph saved to %s" % (png_path,))
+        else:
+            gcmd.respond_info("Graph generation error: %s" % (result.stderr,))
     # Stepper phase tracking
     def _get_phases(self):
         return (256 >> self.fields.get_field("mres")) * 4
