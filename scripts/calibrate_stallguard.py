@@ -13,8 +13,9 @@ try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     PLOTLY_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     PLOTLY_AVAILABLE = False
+    PLOTLY_IMPORT_ERROR = str(e)
 
 
 def load_csv(filename):
@@ -178,8 +179,10 @@ def generate_html_graph(csv_file, output_file, times, sg_results, cs_actuals,
                         velocities):
     """Generate interactive HTML graph using Plotly."""
     if not PLOTLY_AVAILABLE:
-        print("Warning: plotly not installed. Skipping HTML generation.")
-        print("Install with: pip install plotly")
+        print("Warning: plotly not available. Skipping HTML generation.")
+        print("Python: %s" % sys.executable)
+        print("Error: %s" % PLOTLY_IMPORT_ERROR)
+        print("Install with: %s -m pip install plotly" % sys.executable)
         return
 
     # Extract stepper name from filename
