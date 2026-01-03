@@ -8,6 +8,14 @@ import sys
 import os
 import argparse
 
+# Optional plotly import for interactive HTML graphs
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+
 
 def load_csv(filename):
     times, sg_results, cs_actuals, velocities = [], [], [], []
@@ -166,6 +174,71 @@ def generate_velocity_graph(csv_file, output_file, times, sg_results,
     plt.close()
 
 
+def generate_html_graph(csv_file, output_file, times, sg_results, cs_actuals,
+                        velocities):
+    """Generate interactive HTML graph using Plotly."""
+    if not PLOTLY_AVAILABLE:
+        print("Warning: plotly not installed. Skipping HTML generation.")
+        print("Install with: pip install plotly")
+        return
+
+    # Extract stepper name from filename
+    basename = os.path.basename(csv_file)
+    if '_' in basename:
+        stepper_name = basename.rsplit('_', 1)[0]
+    else:
+        stepper_name = basename.rsplit('.', 1)[0] if '.' in basename else basename
+
+    # Create figure with secondary Y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # SG Result trace (left Y-axis, blue)
+    fig.add_trace(
+        go.Scatter(x=times, y=sg_results, name="SG Result",
+                   line=dict(color='#2196F3', width=1),
+                   hovertemplate='Time: %{x:.3f}s<br>SG: %{y}<extra></extra>'),
+        secondary_y=False)
+
+    # CS Actual trace (left Y-axis, green)
+    fig.add_trace(
+        go.Scatter(x=times, y=cs_actuals, name="CS Actual",
+                   line=dict(color='#4CAF50', width=1),
+                   hovertemplate='Time: %{x:.3f}s<br>CS: %{y}<extra></extra>'),
+        secondary_y=False)
+
+    # Velocity trace (right Y-axis, red) - only if data exists
+    if any(v != 0 for v in velocities):
+        fig.add_trace(
+            go.Scatter(x=times, y=velocities, name="Velocity",
+                       line=dict(color='#F44336', width=1),
+                       hovertemplate='Time: %{x:.3f}s<br>Vel: %{y:.1f} mm/s'
+                                     '<extra></extra>'),
+            secondary_y=True)
+
+    # Calculate and show SG average line
+    sg_valid = [v for v in sg_results if v >= 0]
+    if sg_valid:
+        sg_avg = sum(sg_valid) / len(sg_valid)
+        fig.add_hline(y=sg_avg, line_dash="dash", line_color="#2196F3",
+                      annotation_text="SG avg: %.1f" % sg_avg,
+                      secondary_y=False)
+
+    # Layout configuration
+    fig.update_layout(
+        title='Stallguard Measurement: %s' % stepper_name,
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02),
+        margin=dict(t=80)
+    )
+    fig.update_xaxes(title_text="Time (s)", showgrid=True)
+    fig.update_yaxes(title_text="SG Result / CS Actual", secondary_y=False)
+    fig.update_yaxes(title_text="Velocity (mm/s)", secondary_y=True)
+
+    # Write HTML with CDN-hosted Plotly.js
+    fig.write_html(output_file, include_plotlyjs='cdn')
+    print("Interactive graph saved to: %s" % output_file)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate graphs from stallguard CSV data')
@@ -173,6 +246,8 @@ def main():
     parser.add_argument('-o', '--output', help='Output PNG file (base name)')
     parser.add_argument('--show', action='store_true',
                         help='Display graph interactively')
+    parser.add_argument('--html', action='store_true',
+                        help='Generate interactive HTML graph (requires plotly)')
     args = parser.parse_args()
 
     if not os.path.exists(args.csv_file):
@@ -202,6 +277,11 @@ def main():
     if any(v != 0 for v in velocities):
         generate_velocity_graph(args.csv_file, base_output + '_velocity.png',
                                 times, sg_results, velocities, args.show)
+
+    # Graph 3: Interactive HTML (if requested)
+    if args.html:
+        generate_html_graph(args.csv_file, base_output + '.html',
+                            times, sg_results, cs_actuals, velocities)
 
 
 if __name__ == '__main__':

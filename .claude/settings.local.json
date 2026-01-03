@@ -10,7 +10,8 @@
       "Bash(git diff-index:*)",
       "Bash(find:*)",
       "Bash(for f in pyhelper.c itersolve.c stepcompress.c serialqueue.c trapq.c)",
-      "Bash(do echo \"=== $f ===\")"
+      "Bash(do echo \"=== $f ===\")",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

@@ -587,12 +587,16 @@ class TMCCommandHelper:
         if not os.path.exists(script_path):
             gcmd.respond_info("Graph script not found: %s" % (script_path,))
             return
-        png_path = csv_path.rsplit('.', 1)[0] + '.png'
+        base_path = csv_path.rsplit('.', 1)[0]
+        png_path = base_path + '.png'
+        html_path = base_path + '.html'
         result = subprocess.run(
-            [sys.executable, script_path, csv_path, '-o', png_path],
+            [sys.executable, script_path, csv_path, '-o', base_path, '--html'],
             capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             gcmd.respond_info("Graph saved to %s" % (png_path,))
+            if os.path.exists(html_path):
+                gcmd.respond_info("Interactive graph: %s" % (html_path,))
         else:
             error_msg = result.stderr.strip() or result.stdout.strip()
             gcmd.respond_info("Graph generation error (code %d): %s"
