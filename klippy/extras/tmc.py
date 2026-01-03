@@ -560,7 +560,7 @@ class TMCCommandHelper:
         except Exception as e:
             gcmd.respond_info("Graph generation failed: %s" % (str(e),))
     def _generate_stallguard_graph(self, csv_path, gcmd):
-        import subprocess
+        import subprocess, sys
         script_dir = os.path.dirname(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))))
         script_path = os.path.join(script_dir, "scripts",
@@ -570,7 +570,7 @@ class TMCCommandHelper:
             return
         png_path = csv_path.rsplit('.', 1)[0] + '.png'
         result = subprocess.run(
-            ['python3', script_path, csv_path, '-o', png_path],
+            [sys.executable, script_path, csv_path, '-o', png_path],
             capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             gcmd.respond_info("Graph saved to %s" % (png_path,))
