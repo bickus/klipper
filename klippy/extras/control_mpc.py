@@ -30,6 +30,7 @@ class ControlMPC:
         self.last_temp_time = 0.0
         self.last_ff_headroom = self.heater_max_power
         self.last_ff_lookahead = 0.0
+        self.last_ff_anticipation = 0.0
 
         self.printer = heater.printer
         self.toolhead = None
@@ -195,10 +196,20 @@ class ControlMPC:
                     pos_moved = max(-self.const_maximum_retract, pos - pos_prev)
                     extrude_speed_prev = pos_moved / dt
 
-                    # Dynamic feedforward lookahead: look further ahead
-                    # when thermal headroom is low (heater near saturation).
-                    # lookahead = block_heat_capacity / headroom, where
-                    # headroom = max_power - current_losses, floored at 10%.
+                    # Responsive short-term speed (like original)
+                    pos_next_dt = extruder.find_past_position(
+                        read_time + dt
+                    )
+                    speed_dt = (
+                        max(
+                            -self.const_maximum_retract,
+                            pos_next_dt - pos,
+                        )
+                        / dt
+                    )
+
+                    # Dynamic feedforward lookahead: look further
+                    # ahead when thermal headroom is low.
                     headroom = max(
                         self.heater_max_power * 0.1,
                         self.heater_max_power
@@ -208,16 +219,36 @@ class ControlMPC:
                     lookahead = max(
                         dt, self.const_block_heat_capacity / headroom
                     )
-
-                    pos_next = extruder.find_past_position(
+                    pos_next_la = extruder.find_past_position(
                         read_time + lookahead
                     )
-                    pos_move = max(
-                        -self.const_maximum_retract, pos_next - pos
+                    speed_la = (
+                        max(
+                            -self.const_maximum_retract,
+                            pos_next_la - pos,
+                        )
+                        / lookahead
                     )
-                    extrude_speed_next = pos_move / lookahead
+
+                    # Anticipation: blend responsive + lookahead
+                    # based on how far below target the block is.
+                    # At target: pure responsive (no over-smoothing).
+                    # Below target: anticipatory (pre-charges block).
+                    max_gap = (
+                        self.heater_max_power
+                        * self.const_target_reach_time
+                        / self.const_block_heat_capacity
+                    )
+                    target_gap = max(0.0, target_temp - self.state_block_temp)
+                    anticipation = min(1.0, target_gap / max_gap)
+
+                    boost = (
+                        max(0.0, speed_la - speed_dt) * anticipation
+                    )
+                    extrude_speed_next = speed_dt + boost
                     self.last_ff_headroom = headroom
                     self.last_ff_lookahead = lookahead
+                    self.last_ff_anticipation = anticipation
 
         # Modulate ambient transfer coefficient with fan speed
         ambient_transfer = self.const_ambient_transfer
@@ -388,6 +419,7 @@ class ControlMPC:
             "filament_density": self.const_filament_density,
             "ff_headroom": self.last_ff_headroom,
             "ff_lookahead": self.last_ff_lookahead,
+            "ff_anticipation": self.last_ff_anticipation,
         }
 
 
