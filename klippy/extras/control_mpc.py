@@ -193,9 +193,27 @@ class ControlMPC:
                     pos_moved = max(-self.const_maximum_retract, pos - pos_prev)
                     extrude_speed_prev = pos_moved / dt
 
-                    pos_next = extruder.find_past_position(read_time + dt)
-                    pos_move = max(-self.const_maximum_retract, pos_next - pos)
-                    extrude_speed_next = pos_move / dt
+                    # Dynamic feedforward lookahead: look further ahead
+                    # when thermal headroom is low (heater near saturation).
+                    # lookahead = block_heat_capacity / headroom, where
+                    # headroom = max_power - current_losses, floored at 10%.
+                    headroom = max(
+                        self.heater_max_power * 0.1,
+                        self.heater_max_power
+                        - self.last_loss_ambient
+                        - self.last_loss_filament,
+                    )
+                    lookahead = max(
+                        dt, self.const_block_heat_capacity / headroom
+                    )
+
+                    pos_next = extruder.find_past_position(
+                        read_time + lookahead
+                    )
+                    pos_move = max(
+                        -self.const_maximum_retract, pos_next - pos
+                    )
+                    extrude_speed_next = pos_move / lookahead
 
         # Modulate ambient transfer coefficient with fan speed
         ambient_transfer = self.const_ambient_transfer
