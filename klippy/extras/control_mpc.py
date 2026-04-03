@@ -28,6 +28,8 @@ class ControlMPC:
         self.last_loss_filament = 0.0
         self.last_time = 0.0
         self.last_temp_time = 0.0
+        self.last_ff_headroom = self.heater_max_power
+        self.last_ff_lookahead = 0.0
 
         self.printer = heater.printer
         self.toolhead = None
@@ -214,6 +216,8 @@ class ControlMPC:
                         -self.const_maximum_retract, pos_next - pos
                     )
                     extrude_speed_next = pos_move / lookahead
+                    self.last_ff_headroom = headroom
+                    self.last_ff_lookahead = lookahead
 
         # Modulate ambient transfer coefficient with fan speed
         ambient_transfer = self.const_ambient_transfer
@@ -382,6 +386,8 @@ class ControlMPC:
             "filament_temp": self.filament_temp_src,
             "filament_heat_capacity": self.const_filament_heat_capacity,
             "filament_density": self.const_filament_density,
+            "ff_headroom": self.last_ff_headroom,
+            "ff_lookahead": self.last_ff_lookahead,
         }
 
 
