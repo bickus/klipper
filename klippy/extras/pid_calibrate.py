@@ -24,13 +24,13 @@ class PIDCalibrate:
             raise gcmd.error(str(e))
         self.printer.lookup_object('toolhead').get_last_move_time()
         calibrate = ControlAutoTune(heater, target)
-        old_control = heater.set_control(calibrate)
+        old_control = heater.set_control(calibrate, False)
         try:
             pheaters.set_temperature(heater, target, True)
         except self.printer.command_error as e:
-            heater.set_control(old_control)
+            heater.set_control(old_control, False)
             raise
-        heater.set_control(old_control)
+        heater.set_control(old_control, False)
         if write_file:
             calibrate.write_file('/tmp/heattest.txt')
         if calibrate.check_busy(0., 0., 0.):
@@ -101,6 +101,12 @@ class ControlAutoTune:
         if self.heating or len(self.peaks) < 12:
             return True
         return False
+    def get_profile(self):
+        return {"name": "autotune"}
+    def get_type(self):
+        return "autotune"
+    def update_smooth_time(self):
+        pass
     # Analysis
     def check_peaks(self):
         self.peaks.append((self.peak, self.peak_time))

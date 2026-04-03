@@ -104,9 +104,11 @@ class GCodeDispatch:
         self.mux_commands = {}
         self.gcode_help = {}
         self.status_commands = {}
+        self._interrupt_counter = 0
         # Register commands needed before config file is loaded
         handlers = ['M110', 'M112', 'M115',
-                    'RESTART', 'FIRMWARE_RESTART', 'ECHO', 'STATUS', 'HELP','LOG_ROLLOVER',]
+                    'RESTART', 'FIRMWARE_RESTART', 'ECHO', 'STATUS', 'HELP',
+                    'HEATER_INTERRUPT', 'LOG_ROLLOVER',]
         for cmd in handlers:
             func = getattr(self, 'cmd_' + cmd)
             desc = getattr(self, 'cmd_' + cmd + '_help', None)
@@ -364,6 +366,13 @@ class GCodeDispatch:
             if cmd in self.gcode_help:
                 cmdhelp.append("%-10s: %s" % (cmd, self.gcode_help[cmd]))
         gcmd.respond_info("\n".join(cmdhelp), log=False)
+    def get_interrupt_counter(self):
+        return self._interrupt_counter
+    def increment_interrupt_counter(self):
+        self._interrupt_counter += 1
+    cmd_HEATER_INTERRUPT_help = "Interrupt any in-progress heater calibration"
+    def cmd_HEATER_INTERRUPT(self, gcmd):
+        self.increment_interrupt_counter()
     def cmd_LOG_ROLLOVER(self, gcmd):
         self.printer.bglogger.doRollover()
 
